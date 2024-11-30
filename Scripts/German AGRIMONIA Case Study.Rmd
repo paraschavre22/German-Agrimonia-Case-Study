@@ -1,0 +1,461 @@
+---
+title: "German_Agrimonia_Case_Study"
+author: "Paras Vikas Chavre"
+date: "2024-05-14"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(gridExtra)
+library(mice)
+library(car)
+library(lmtest)
+library(sandwich)
+library(MASS)     
+library(glmnet)    
+
+library(tinytex)
+```
+
+```{r}
+setwd("C:/Users/Asus/Downloads/German-AGRIMONIA-Case-Study")
+```
+
+
+```{r}
+data_german_agrimonia <- read.csv("german_agrimonia_data_imputed.csv")
+```
+
+```{r}
+summary(data_german_agrimonia)
+```
+```{r}
+data_german_agrimonia$IDStations <- as.factor(data_german_agrimonia$IDStations)
+data_german_agrimonia$Time <- as.factor(data_german_agrimonia$Time)
+summary(data_german_agrimonia)
+```
+
+Observation : After We perform Model Based Imputation (pmm) we do not have any NA values.
+```{r}
+# Check for duplicates
+duplicates <- duplicated(data_german_agrimonia)
+
+# Remove duplicates
+data_german_agrimonia <- data_german_agrimonia[!duplicates, ]
+
+```
+Purpose: To find if their is any Duplicate rows in our data set.
+Observation: No Duplicates Found. 
+
+```{r, fig.width=10, fig.height=10}
+library(ggplot2)
+#install.packages("corrplot")
+library(corrplot)
+# Select only numeric variables
+numeric_data <- data_german_agrimonia[, sapply(data_german_agrimonia, is.numeric)]
+
+# Calculate the correlation matrix
+cor_matrix <- cor(numeric_data)
+
+
+# Visualize the correlation matrix with enhancements
+corrplot(cor_matrix, 
+         method = "color",               # Use color to fill the correlation matrix
+         col = colorRampPalette(c("blue", "white", "red"))(200), # Set color palette
+         type = "upper",                 # Show only upper part of the correlation matrix
+         addCoef.col = "black",          # Add correlation coefficients
+         tl.col = "black",               # Color of text labels
+         tl.srt = 45,                    # Text label rotation
+         title = "Correlation Matrix",   # Add title
+         mar = c(0,0,1,0),               # Adjust margins
+         cl.pos = "b",                   # Position color legend at the bottom
+         order = "hclust",               # Order by hierarchical clustering
+         tl.cex = 0.8,                   # Adjust the size of text labels
+         cl.cex = 0.8,                   # Adjust the size of the color legend text
+         number.cex = 0.8)               # Adjust the size of correlation coefficient numbers
+
+```
+Key Observations:
+
+Latitude vs. Altitude:
+Strong negative correlation (large red circle), indicating that as latitude increases, altitude tends to decrease.
+Altitude vs. WE_temp_2m:
+
+Moderate negative correlation (medium-sized red circle), indicating that higher altitudes tend to have lower temperatures.
+Latitude vs. WE_wind_speed_10m_mean:
+
+Moderate positive correlation (medium-sized blue circle), indicating that higher latitudes tend to have higher wind speeds.
+WE_temp_2m vs. WE_solar_radiation:
+
+Strong positive correlation (large blue circle), indicating that higher temperatures are associated with higher solar radiation levels.
+EM_nh3_agr_soils vs. WE_solar_radiation:
+
+Moderate positive correlation (medium-sized blue circle), indicating that emissions from agricultural soils are higher with increased solar radiation.
+EM_nox_traffic vs. Latitude:
+
+Moderate positive correlation (medium-sized blue circle), suggesting that traffic-related NOx emissions are higher at higher latitudes.
+Less Noticeable Correlations
+AQ_pm10 vs. AQ_pm25:
+Small positive correlation, suggesting a weak relationship between PM10 and PM2.5 levels.
+AQ_nox vs. AQ_pm10 and AQ_pm25:
+Small positive correlations, indicating weak relationships between NOx and particulate matter levels.
+Weak Correlations
+Many variables, such as AQ_co with other air quality indicators, have very small circles, indicating weak correlations.
+Summary
+The plot reveals several significant correlations that align with expected relationships, such as altitude and temperature, latitude and altitude, and temperature and solar radiation.
+Many air quality variables (AQ_co, AQ_nox, AQ_pm10, AQ_pm25) show weak correlations with each other, indicating they may be influenced by different sources or factors.
+
+
+2.	Exploratory Data Analysis (EDA):
+•	Conducting exploratory data analysis to understand the distribution and relationships among variables.
+
+2.1) Summary Statistics
+
+```{r}
+summary(data_german_agrimonia)
+```
+2.2) Data Visualization to detect Outliers 
+
+```{r}
+# List of numerical variables
+num_vars <- c("AQ_pm10", "AQ_pm25", "AQ_co", "AQ_nox", "AQ_so2", "WE_temp_2m", "WE_wind_speed_10m_mean", "WE_tot_precipitation", "WE_solar_radiation", "EM_nh3_livestock_mm", "EM_nh3_agr_soils", "EM_nh3_agr_waste_burn", "EM_nox_traffic", "LI_bovine", "LA_land_use")
+
+# Create a list to store ggplot objects
+plots <- list()
+summaries <- list()
+
+# Generate histograms and store them in the list
+for (var in num_vars) {
+  p <- ggplot(data_german_agrimonia, aes_string(x = var)) + 
+    geom_histogram(bins = 20, fill = "blue", color = "black") +
+    theme_minimal() +
+    ggtitle(paste("", var)) +
+    xlab(var) +
+    ylab("Frequency") +
+    theme(plot.title = element_text(hjust = 0.5, size = 8),
+          axis.text = element_text(size = 6),
+          axis.title = element_text(size = 3))
+  
+  plots[[var]] <- p
+  # Calculate summary statistics
+  summary_stats <- summary(data_german_agrimonia[[var]])
+  summaries[[var]] <- summary_stats
+}
+
+# Arrange plots in a grid with 2 columns
+grid.arrange(grobs = plots, ncol = 4, top = "Histogram of All Fields")
+
+
+```
+
+```{r}
+# Print summary statistics
+for (var in num_vars) {
+  cat(paste("Summary statistics for", var, ":\n"))
+  print(summaries[[var]])
+  cat("\n")
+}
+
+```
+
+<!-- 2.3) Outlier Detection and Treatment -->
+```{r}
+numeric_columns <- c("Latitude", "Longitude", "Altitude", "AQ_pm10", "AQ_pm25", "AQ_co", 
+                     "AQ_nox", "AQ_so2", "WE_temp_2m", "WE_wind_speed_10m_mean", 
+                     "WE_tot_precipitation", "WE_solar_radiation", "EM_nh3_livestock_mm", 
+                     "EM_nh3_agr_soils", "EM_nh3_agr_waste_burn", "EM_nox_traffic", 
+                     "LI_bovine", "LA_land_use")
+
+
+data_german_agrimonia[numeric_columns] <- lapply(data_german_agrimonia[numeric_columns], as.numeric)
+
+
+
+detect_outliers_modified_zscore <- function(data_german_agrimonia, threshold = 3.5) {
+  median_val <- median(data_german_agrimonia, na.rm = TRUE)
+  mad_val <- mad(data_german_agrimonia, constant = 1, na.rm = TRUE)
+  modified_z_scores <- 0.6745 * (data_german_agrimonia - median_val) / mad_val
+  outliers <- abs(modified_z_scores) > threshold
+  return(outliers)
+}
+
+remove_outliers_modified_zscore <- function(data_german_agrimonia, columns, threshold = 3.5) {
+  for (col in columns) {
+    outliers <- detect_outliers_modified_zscore(data_german_agrimonia[[col]], threshold)
+    data_german_agrimonia <- data_german_agrimonia[!outliers, ]
+  }
+  return(data_german_agrimonia)
+}
+
+data_clean_modified_zscore <- remove_outliers_modified_zscore(data_german_agrimonia, numeric_columns)
+
+summary(data_clean_modified_zscore)
+
+data_german_agrimonia_cleaned <- data_clean_modified_zscore
+```
+
+```{r}
+# List of numerical variables
+num_vars <- c("AQ_pm10", "AQ_pm25", "AQ_co", "AQ_nox", "AQ_so2", "WE_temp_2m", "WE_wind_speed_10m_mean", "WE_tot_precipitation", "WE_solar_radiation", "EM_nh3_livestock_mm", "EM_nh3_agr_soils", "EM_nh3_agr_waste_burn", "EM_nox_traffic", "LI_bovine", "LA_land_use")
+
+# Create a list to store ggplot objects
+plots <- list()
+summaries <- list()
+
+# Generate histograms and store them in the list
+for (var in num_vars) {
+  p <- ggplot(data_german_agrimonia_cleaned, aes_string(x = var)) + 
+    geom_histogram(bins = 20, fill = "blue", color = "black") +
+    theme_minimal() +
+    ggtitle(paste("", var)) +
+    xlab(var) +
+    ylab("Frequency") +
+    theme(plot.title = element_text(hjust = 0.5, size = 8),
+          axis.text = element_text(size = 6),
+          axis.title = element_text(size = 3))
+  
+  plots[[var]] <- p
+  # Calculate summary statistics
+  summary_stats <- summary(data_german_agrimonia_cleaned[[var]])
+  summaries[[var]] <- summary_stats
+}
+
+# Arrange plots in a grid with 2 columns
+grid.arrange(grobs = plots, ncol = 4, top = "Histogram of All Fields")
+
+```
+
+```{r}
+# Print summary statistics for cleaned data and without outliers
+for (var in num_vars) {
+  cat(paste("Summary statistics for", var, ":\n"))
+  print(summaries[[var]])
+  cat("\n")
+}
+
+```
+•	Outlier Removal Impact: Outlier removal has generally reduced the range and variability of most variables, leading to more consistent and reliable data.
+•	Skewed Distributions: Several variables (e.g., AQ_pm10, AQ_pm25, AQ_so2) remain right-skewed, indicating the presence of high values despite outlier removal.
+•	Symmetry: Variables like AQ_co and some weather metrics have distributions that appear more symmetrical post-cleaning.
+•	Controlled Emissions: Emission-related variables now show a more controlled distribution, reflecting a more realistic range of emissions.
+
+
+
+
+```{r Selecting two Stations for analysis}
+unique_station_ids <- unique(data_german_agrimonia_cleaned$IDStations)
+print(unique_station_ids)
+
+data_german_agrimonia_cleaned$IDStations <- trimws(data_german_agrimonia_cleaned$IDStations)
+unique_station_ids <- unique(data_german_agrimonia_cleaned$IDStations)
+print(unique_station_ids)
+
+
+data_german_agrimonia_cleaned$IDStations <- as.character(data_german_agrimonia_cleaned$IDStations)
+str(data_german_agrimonia_cleaned$IDStations)
+
+```
+
+```{r}
+# Normalize station IDs by removing the "STA.DE_" prefix if it exists
+data_german_agrimonia_cleaned$IDStations <- gsub("^STA.DE_", "", data_german_agrimonia_cleaned$IDStations)
+
+# Verify unique station IDs after normalization
+unique_station_ids <- unique(data_german_agrimonia_cleaned$IDStations)
+print(unique_station_ids)
+
+# Choose two different station IDs for subsetting
+station_id1 <- "DEBB063"
+station_id2 <- "DENI067"  # Pick another unique ID
+
+# Create subsets for the specified station IDs
+station_data1 <- subset(data_german_agrimonia_cleaned, IDStations == station_id1)
+station_data2 <- subset(data_german_agrimonia_cleaned, IDStations == station_id2)
+
+# Check the number of observations
+cat("Number of observations for station", station_id1, ":", nrow(station_data1), "\n")
+cat("Number of observations for station", station_id2, ":", nrow(station_data2), "\n")
+
+# Verify the structure of the subset data
+str(station_data1)
+str(station_data2)
+
+```
+ Regression Models
+
+```{r Linear Regression}
+# Fit linear regression models for PM10 for both stations
+model_station1_pm10 <- lm(AQ_pm10 ~ EM_nh3_livestock_mm + EM_nh3_agr_soils + WE_temp_2m + WE_wind_speed_10m_mean, data = station_data1)
+model_station2_pm10 <- lm(AQ_pm10 ~ EM_nh3_livestock_mm + EM_nh3_agr_soils + WE_temp_2m + WE_wind_speed_10m_mean, data = station_data2)
+
+# Summarize the models
+summary(model_station1_pm10)
+summary(model_station2_pm10)
+
+```
+Impact of Agricultural Practices:
+
+For both stations, EM_nh3_livestock_mm is a significant predictor of PM10 levels (Station 1: p = 0.00227, Station 2: p = 0.00021). This indicates that emissions from livestock management have a measurable negative impact on PM10 levels.
+EM_nh3_agr_soils is not a significant predictor for PM10 at either station, suggesting that emissions from agricultural soils have less impact on PM10 levels compared to livestock emissions.
+
+Correlation Between Agricultural Activities and Air Pollution Levels:
+
+The significant negative coefficients for EM_nh3_livestock_mm in both models indicate an inverse relationship with PM10 concentrations. This suggests that higher livestock emissions correspond to lower PM10 levels, which might be counter intuitive and warrants further investigation.
+The temperature (WE_temp_2m) and wind speed (WE_wind_speed_10m_mean) also play significant roles, with wind speed having a strong negative effect on PM10 levels at both stations.
+
+
+```{r Ridge Regression}
+
+# Standardize the predictor variables
+predictors <- scale(data_german_agrimonia_cleaned[, c("EM_nh3_livestock_mm", "EM_nh3_agr_soils", "WE_temp_2m", "WE_wind_speed_10m_mean")])
+response <- data_german_agrimonia_cleaned$AQ_pm10
+
+# Ridge regression model for station 1
+station1_data <- subset(data_german_agrimonia_cleaned, IDStations == "DEBB063")
+x1 <- as.matrix(station1_data[, c("EM_nh3_livestock_mm", "EM_nh3_agr_soils", "WE_temp_2m", "WE_wind_speed_10m_mean")])
+y1 <- station1_data$AQ_pm10
+ridge_model_station1 <- glmnet(x1, y1, alpha = 0)  # alpha = 0 for ridge regression
+
+# Ridge regression model for station 2
+station2_data <- subset(data_german_agrimonia_cleaned, IDStations == "DENI067")
+x2 <- as.matrix(station2_data[, c("EM_nh3_livestock_mm", "EM_nh3_agr_soils", "WE_temp_2m", "WE_wind_speed_10m_mean")])
+y2 <- station2_data$AQ_pm10
+ridge_model_station2 <- glmnet(x2, y2, alpha = 0)  # alpha = 0 for ridge regression
+
+```
+
+```{r Selecting the Best Lambda}
+
+# Using cross-validation to select the best lambda for the ridge regression model.
+# Cross-validation to find the best lambda for station 1
+cv_ridge_station1 <- cv.glmnet(x1, y1, alpha = 0)
+best_lambda_station1 <- cv_ridge_station1$lambda.min
+print(best_lambda_station1)
+
+# Cross-validation to find the best lambda for station 2
+cv_ridge_station2 <- cv.glmnet(x2, y2, alpha = 0)
+best_lambda_station2 <- cv_ridge_station2$lambda.min
+print(best_lambda_station2)
+
+```
+
+```{r Fitting the Ridge Regression Model with the Best Lambda}
+# Final ridge regression model for station 1
+ridge_model_final_station1 <- glmnet(x1, y1, alpha = 0, lambda = best_lambda_station1)
+
+# Final ridge regression model for station 2
+ridge_model_final_station2 <- glmnet(x2, y2, alpha = 0, lambda = best_lambda_station2)
+
+```
+
+```{r Comparing the Results of Both Regression Models}
+# Coefficients for linear regression
+coef(lm(AQ_pm10 ~ EM_nh3_livestock_mm + EM_nh3_agr_soils + WE_temp_2m + WE_wind_speed_10m_mean, data = station1_data))
+coef(lm(AQ_pm10 ~ EM_nh3_livestock_mm + EM_nh3_agr_soils + WE_temp_2m + WE_wind_speed_10m_mean, data = station2_data))
+
+# Coefficients for ridge regression
+coef(ridge_model_final_station1)
+coef(ridge_model_final_station2)
+
+# Model performance metrics
+# Linear regression
+mse_lr_station1 <- mean(residuals(lm(AQ_pm10 ~ EM_nh3_livestock_mm + EM_nh3_agr_soils + WE_temp_2m + WE_wind_speed_10m_mean, data = station1_data))^2)
+mse_lr_station2 <- mean(residuals(lm(AQ_pm10 ~ EM_nh3_livestock_mm + EM_nh3_agr_soils + WE_temp_2m + WE_wind_speed_10m_mean, data = station2_data))^2)
+
+# Ridge regression
+pred_ridge_station1 <- predict(ridge_model_final_station1, s = best_lambda_station1, newx = x1)
+mse_ridge_station1 <- mean((y1 - pred_ridge_station1)^2)
+
+pred_ridge_station2 <- predict(ridge_model_final_station2, s = best_lambda_station2, newx = x2)
+mse_ridge_station2 <- mean((y2 - pred_ridge_station2)^2)
+
+# Print MSE for both models
+print(paste("MSE for Linear Regression (Station 1):", mse_lr_station1))
+print(paste("MSE for Ridge Regression (Station 1):", mse_ridge_station1))
+print(paste("MSE for Linear Regression (Station 2):", mse_lr_station2))
+print(paste("MSE for Ridge Regression (Station 2):", mse_ridge_station2))
+
+```
+```{r}
+# Fit Ridge Regression Models for both stations
+ridge_model1 <- glmnet(x = model.matrix(~ EM_nh3_livestock_mm + EM_nh3_agr_soils + WE_temp_2m + WE_wind_speed_10m_mean, station_data1), 
+                       y = station_data1$AQ_pm10, 
+                       alpha = 0)
+
+ridge_model2 <- glmnet(x = model.matrix(~ EM_nh3_livestock_mm + EM_nh3_agr_soils + WE_temp_2m + WE_wind_speed_10m_mean, station_data2), 
+                       y = station_data2$AQ_pm10, 
+                       alpha = 0)
+
+```
+
+
+```{r}
+# Required Libraries
+library(ggplot2)
+
+# Predictions from Linear Regression
+pred_linreg_station1 <- predict(model_station1_pm10, newdata = station_data1)
+pred_linreg_station2 <- predict(model_station2_pm10, newdata = station_data2)
+
+# Predictions from Ridge Regression
+pred_ridge_station1 <- predict(ridge_model1, newx = model.matrix(~ EM_nh3_livestock_mm + EM_nh3_agr_soils + WE_temp_2m + WE_wind_speed_10m_mean, station_data1))
+pred_ridge_station2 <- predict(ridge_model2, newx = model.matrix(~ EM_nh3_livestock_mm + EM_nh3_agr_soils + WE_temp_2m + WE_wind_speed_10m_mean, station_data2))
+
+# Creating DataFrames for Plotting
+plot_data1 <- data.frame(
+  Actual = station_data1$AQ_pm10,
+  Predicted_Linear = pred_linreg_station1,
+  Predicted_Ridge = as.vector(pred_ridge_station1)
+)
+
+plot_data2 <- data.frame(
+  Actual = station_data2$AQ_pm10,
+  Predicted_Linear = pred_linreg_station2,
+  Predicted_Ridge = as.vector(pred_ridge_station2)
+)
+
+# Plot for Station 1
+plot_station1 <- ggplot(plot_data1, aes(x = Actual)) +
+  geom_point(aes(y = Predicted_Linear), color = "blue", alpha = 0.5) +
+  geom_point(aes(y = Predicted_Ridge), color = "red", alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(title = "Comparison of Linear and Ridge Regression for Station 1",
+       x = "Actual PM10",
+       y = "Predicted PM10") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_color_manual(values = c("blue", "red"))
+
+# Plot for Station 2
+plot_station2 <- ggplot(plot_data2, aes(x = Actual)) +
+  geom_point(aes(y = Predicted_Linear), color = "blue", alpha = 0.5) +
+  geom_point(aes(y = Predicted_Ridge), color = "red", alpha = 0.5) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  labs(title = "Comparison of Linear and Ridge Regression for Station 2",
+       x = "Actual PM10",
+       y = "Predicted PM10") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_color_manual(values = c("blue", "red"))
+
+# Display Plots
+print(plot_station1)
+print(plot_station2)
+
+```
+Conclusion
+How do different agricultural management practices affect air quality parameters such as PM10 concentrations?
+•	Both models indicate a negative relationship between PM10 concentrations and ammonia emissions from livestock and agricultural soils, suggesting that increased emissions are associated with lower PM10 levels. This could be due to the complex interaction of various factors affecting PM10.
+Is there a correlation between specific agricultural activities (livestock farming, crop cultivation) and air pollution levels?
+•	Both models consistently show a negative correlation between livestock ammonia emissions and PM10 levels. However, the effect of ammonia emissions from agricultural soils is less significant.
+The results from Ridge Regression validate the findings from Linear Regression by showing similar trends and relationships, with the added benefit of regularization to avoid over fitting. This comparison strengthens the reliability of the conclusions drawn regarding the influence of agricultural practices on air quality parameters.
+Are there seasonal variations in air quality associated with agricultural activities?
+•	Seasonal variations can be inferred by examining the temperature and wind speed variables, which are proxies for seasonal changes. Both models show significant effects of temperature and wind speed on PM10 levels, indicating that air quality is influenced by seasonal factors.
+The results from Ridge Regression validate the findings from Linear Regression by showing similar trends and relationships, with the added benefit of regularization to avoid over fitting. This comparison strengthens the reliability of the conclusions drawn regarding the influence of agricultural practices on air quality parameters.
+
